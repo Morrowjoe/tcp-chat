@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCP Chat</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2330; --muted:#6b7385; --accent:#2f6fed; --line:#e2e5ec; --mine:#dbe7ff; --sys:#8a6d00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171f; --card:#1d222d; --text:#e8ebf2; --muted:#9aa3b5; --accent:#6c9bff; --line:#2c3342; --mine:#27406f; --sys:#e0c35a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; align-items:center; justify-content:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; }
+  #login { padding:28px; width:min(360px, 92vw); }
+  #login h1 { margin:0 0 6px; font-size:20px; } #login p { margin:0 0 16px; color:var(--muted); }
+  input, select, button { font:inherit; color:inherit; }
+  input, select { width:100%; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  #err { color:#d33; min-height:20px; margin-top:8px; font-size:13px; }
+  #app { display:none; width:min(900px, 96vw); height:min(640px, 94vh); grid-template-columns:200px 1fr; overflow:hidden; }
+  aside { border-right:1px solid var(--line); padding:14px; overflow:auto; }
+  aside h2 { margin:0 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  aside div { padding:4px 0; } .me { font-weight:600; }
+  main { display:flex; flex-direction:column; min-width:0; }
+  #log { flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:8px; }
+  .m { max-width:80%; padding:8px 12px; border-radius:10px; border:1px solid var(--line); overflow-wrap:anywhere; }
+  .m.mine { align-self:flex-end; background:var(--mine); }
+  .m .who { font-size:12px; color:var(--muted); display:block; }
+  .m.priv { border-style:dashed; }
+  .sys { align-self:center; color:var(--sys); font-size:13px; }
+  form { display:flex; gap:8px; padding:12px; border-top:1px solid var(--line); }
+  form select { width:150px; flex:none; } form input { flex:1; }
+  @media (max-width:640px){ #app { grid-template-columns:1fr; } aside { display:none; } }
+</style>
+</head>
+<body>
+<div id="login" class="card">
+  <h1>TCP Chat</h1>
+  <p>Pick a username to join the conversation.</p>
+  <input id="name" placeholder="Username (2-20 letters, digits, _ or -)" maxlength="20" autofocus>
+  <div id="err"></div>
+  <button id="join">Join chat</button>
+</div>
+<div id="app" class="card">
+  <aside><h2>Online</h2><div id="users"></div></aside>
+  <main>
+    <div id="log"></div>
+    <form id="send">
+      <select id="to"><option value="">Everyone</option></select>
+      <input id="text" placeholder="Type a message" autocomplete="off" maxlength="1000">
+      <button>Send</button>
+    </form>
+  </main>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let ws, me = "";
+
+function connect() {
+  const name = $("name").value.trim();
+  if (!name) { $("err").textContent = "Enter a username."; return; }
+  $("err").textContent = "";
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onopen = () => ws.send(JSON.stringify({ type: "join", username: name }));
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => { if (me) addSys("Disconnected from server."); else $("err").textContent = $("err").textContent || "Could not connect."; };
+}
+
+function handle(m) {
+  if (m.type === "joined") {
+    me = m.username;
+    $("login").style.display = "none"; $("app").style.display = "grid";
+    setUsers(m.users); addSys("You joined as " + me);
+  } else if (m.type === "error" && !me) {
+    $("err").textContent = m.text; ws.close();
+  } else if (m.type === "msg") {
+    addMsg(m.from, m.text, m.from === me, false);
+  } else if (m.type === "private") {
+    addMsg(m.from === me ? "you \u2192 " + m.to : m.from + " (private)", m.text, m.from === me, true);
+  } else if (m.type === "system") {
+    addSys(m.text); ws.send(JSON.stringify({ type: "users" }));
+  } else if (m.type === "users") {
+    setUsers(m.users);
+  } else if (m.type === "error") {
+    addSys("! " + m.text);
+  }
+}
+
+function setUsers(list) {
+  const box = $("users"); box.textContent = "";
+  list.forEach(u => { const d = document.createElement("div"); d.textContent = u + (u === me ? " (you)" : ""); if (u === me) d.className = "me"; box.appendChild(d); });
+  const sel = $("to"), cur = sel.value; sel.textContent = "";
+  sel.add(new Option("Everyone", ""));
+  list.filter(u => u !== me).forEach(u => sel.add(new Option("Private: " + u, u)));
+  sel.value = list.includes(cur) ? cur : "";
+}
+
+function addMsg(who, text, mine, priv) {
+  const d = document.createElement("div"); d.className = "m" + (mine ? " mine" : "") + (priv ? " priv" : "");
+  const w = document.createElement("span"); w.className = "who"; w.textContent = who;
+  d.appendChild(w); d.appendChild(document.createTextNode(text)); push(d);
+}
+function addSys(text) { const d = document.createElement("div"); d.className = "sys"; d.textContent = text; push(d); }
+function push(el) { const l = $("log"); l.appendChild(el); l.scrollTop = l.scrollHeight; }
+
+$("join").onclick = connect;
+$("name").onkeydown = e => { if (e.key === "Enter") connect(); };
+$("send").onsubmit = e => {
+  e.preventDefault();
+  const text = $("text").value.trim(); if (!text || !ws || ws.readyState !== 1) return;
+  const to = $("to").value;
+  ws.send(JSON.stringify(to ? { type: "private", to, text } : { type: "msg", text }));
+  $("text").value = "";
+};
+</script>
+</body>
+</html>
